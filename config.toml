@@ -1,0 +1,33 @@
+# Configuración de halo — widgets circulares de monitorización.
+# Los cambios se aplican al reiniciar la aplicación.
+# Las posiciones se actualizan automáticamente al arrastrar los widgets.
+
+[theme]
+progress_color = "#E63027"
+background_color = "#202020"
+text_color = "#FFFFFF"
+ring_background_color = "#3A3A3A"
+ring_width = 10.0
+
+[widget]
+size = 140.0
+opacity = 0.9
+always_on_top = true
+show_label = true
+
+[cpu]
+enabled = true
+position = [100.0, 100.0]
+
+[ram]
+enabled = true
+position = [260.0, 100.0]
+
+[gpu]
+enabled = false
+
+[disk]
+enabled = false
+
+[network]
+enabled = false

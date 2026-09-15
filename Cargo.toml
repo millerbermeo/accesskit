@@ -1,0 +1,17 @@
+[package]
+name = "halo"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Backend glow (OpenGL): transparencia de ventana probada en X11/Wayland
+# y tiempos de compilación mucho menores que con wgpu.
+eframe = { version = "0.36.2", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "wayland",
+    "x11",
+] }
+serde = { version = "1.0.229", features = ["derive"] }
+sysinfo = "0.39.6"
+toml = "1.1.6"
