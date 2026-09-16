@@ -49,7 +49,12 @@ impl<'a> CircularProgress<'a> {
     fn paint(&self, ui: &mut Ui, rect: Rect) {
         let painter = ui.painter();
         let center = rect.center();
-        let radius = self.size * 0.5;
+        // Margen entre el círculo y el borde de la ventana: si el diámetro
+        // coincidiera exactamente con el tamaño de la ventana, el suavizado
+        // del borde quedaría cortado en seco justo en los puntos de
+        // tangencia (arriba/abajo/lados), y el círculo se ve "achatado" ahí.
+        const EDGE_MARGIN: f32 = 3.0;
+        let radius = self.size * 0.5 - EDGE_MARGIN;
         let ring_width = self.theme.ring_width.clamp(1.0, radius);
         let ring_radius = radius - ring_width * 0.5;
 
