@@ -167,7 +167,7 @@ pub struct WidgetConfig {
 impl Default for WidgetConfig {
     fn default() -> Self {
         Self {
-            size: 140.0,
+            size: 84.0,
             opacity: 0.90,
             always_on_top: true,
             show_label: true,

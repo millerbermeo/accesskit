@@ -232,7 +232,18 @@ impl eframe::App for HaloApp {
         let widget_cfg = self.config.widget;
         let mut animating = false;
 
-        // El primer widget habilitado usa la ventana raíz.
+        // El primer widget habilitado usa la ventana raíz. A diferencia de las
+        // ventanas secundarias (cuyo ViewportBuilder se reaplica en cada frame
+        // vía show_viewport_immediate), la raíz solo recibe su ViewportBuilder
+        // una vez al arrancar, y algunos gestores de ventanas (p. ej. Mutter en
+        // X11) descartan el nivel "always on top" pedido antes del primer mapeo.
+        // Se reafirma en cada frame para que quede fijado igual que las demás.
+        ui.ctx()
+            .send_viewport_cmd(ViewportCommand::WindowLevel(if widget_cfg.always_on_top {
+                WindowLevel::AlwaysOnTop
+            } else {
+                WindowLevel::Normal
+            }));
         {
             let widget = &mut self.widgets[0];
             animating |= widget.tick_animation();
