@@ -13,6 +13,7 @@ Es un monitor de recursos minimalista pensado para tenerlo siempre visible encim
 - **Ventanas**: cada métrica habilitada vive en su propia ventana sin decoraciones, transparente y sin foco de teclado (`with_active(false)`), para no interferir con el trabajo normal.
 - **Animación**: al cambiar el valor de una métrica, el anillo se anima con un *ease-out* cúbico durante 400 ms en vez de saltar bruscamente.
 - **Posiciones**: al arrastrar un widget, su nueva posición se guarda automáticamente (con un debounce de 1s) en el archivo de configuración.
+- **Se ejecuta solo en segundo plano**: al lanzar `halo`, el proceso se desatacha de la terminal (`fork` + `setsid`, vía `daemon()`) antes de abrir ninguna ventana. La terminal recupera el control al instante y podés cerrarla sin que la app se cierre. Para depurar con los mensajes de error visibles en la terminal, usá `HALO_FOREGROUND=1 halo`.
 - **Repintado eficiente**: mientras no hay animación en curso, la app "duerme" y solo despierta para el siguiente refresco de métricas — no consume CPU de forma constante.
 - **Icono de bandeja**: al arrancar aparece un icono en la bandeja del sistema (área de notificaciones). Un click despliega un menú con:
   - **Iniciar con el sistema** (checkbox): activa/desactiva el arranque automático al iniciar sesión, escribiendo/borrando `~/.config/autostart/halo.desktop` (estándar XDG Autostart). El estado se lee de ese archivo al abrir el menú, así que persiste entre reinicios sin configuración adicional.

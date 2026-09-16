@@ -26,7 +26,24 @@ fn config_path() -> PathBuf {
     PathBuf::from("config.toml")
 }
 
+/// Desatacha el proceso de la terminal (fork + setsid + stdio a `/dev/null`),
+/// para que `halo` alcance como comando único y sobreviva al cierre de la
+/// terminal. Debe llamarse antes de crear hilos o conexiones (X11, GTK), ya
+/// que solo el hilo que llama a `fork()` sobrevive en el hijo.
+/// `HALO_FOREGROUND=1` lo desactiva (útil para depurar con salida visible).
+fn daemonize() {
+    if env::var_os("HALO_FOREGROUND").is_some() {
+        return;
+    }
+    // nochdir=1: conserva el directorio de trabajo. noclose=0: redirige
+    // stdin/stdout/stderr a /dev/null.
+    unsafe {
+        libc::daemon(1, 0);
+    }
+}
+
 fn main() -> eframe::Result<()> {
+    daemonize();
     tray::spawn();
 
     let config_path = config_path();
