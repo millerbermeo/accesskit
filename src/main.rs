@@ -3,6 +3,7 @@
 mod app;
 mod config;
 mod metrics;
+mod tray;
 mod widgets;
 
 use std::env;
@@ -26,6 +27,8 @@ fn config_path() -> PathBuf {
 }
 
 fn main() -> eframe::Result<()> {
+    tray::spawn();
+
     let config_path = config_path();
     let config = Config::load_or_create(&config_path);
 

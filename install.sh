@@ -15,6 +15,17 @@ if ! command -v git >/dev/null 2>&1; then
     exit 1
 fi
 
+# El icono de bandeja (GTK + libappindicator) necesita estas libs de desarrollo.
+if command -v apt-get >/dev/null 2>&1; then
+    if ! pkg-config --exists gtk+-3.0 xdo 2>/dev/null; then
+        echo "==> Instalando dependencias de sistema (gtk3, libxdo, appindicator)..."
+        sudo apt-get install -y libgtk-3-dev libxdo-dev libayatana-appindicator3-dev \
+            || sudo apt-get install -y libgtk-3-dev libxdo-dev libappindicator3-dev
+    fi
+else
+    echo "==> Aviso: asegúrate de tener instaladas las libs de desarrollo de gtk3, libxdo y libappindicator/ayatana-appindicator para tu distro."
+fi
+
 if ! command -v cargo >/dev/null 2>&1; then
     echo "==> Rust/cargo no encontrado, instalando con rustup..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal

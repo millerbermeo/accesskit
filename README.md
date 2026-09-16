@@ -14,6 +14,9 @@ Es un monitor de recursos minimalista pensado para tenerlo siempre visible encim
 - **Animación**: al cambiar el valor de una métrica, el anillo se anima con un *ease-out* cúbico durante 400 ms en vez de saltar bruscamente.
 - **Posiciones**: al arrastrar un widget, su nueva posición se guarda automáticamente (con un debounce de 1s) en el archivo de configuración.
 - **Repintado eficiente**: mientras no hay animación en curso, la app "duerme" y solo despierta para el siguiente refresco de métricas — no consume CPU de forma constante.
+- **Icono de bandeja**: al arrancar aparece un icono en la bandeja del sistema (área de notificaciones). Un click despliega un menú con:
+  - **Iniciar con el sistema** (checkbox): activa/desactiva el arranque automático al iniciar sesión, escribiendo/borrando `~/.config/autostart/halo.desktop` (estándar XDG Autostart). El estado se lee de ese archivo al abrir el menú, así que persiste entre reinicios sin configuración adicional.
+  - **Salir**: cierra la aplicación (las ventanas no tienen barra ni botón de cerrar).
 
 ### Estructura del código
 
@@ -88,6 +91,8 @@ cargo build --release
 - Rust (se instala solo si falta, vía `rustup`).
 - Linux con X11 o Wayland.
 - `git`.
+- Libs de desarrollo para el icono de bandeja: `libgtk-3-dev`, `libxdo-dev`, `libayatana-appindicator3-dev` (o `libappindicator3-dev`). `install.sh` las instala automáticamente en distros basadas en Debian/Ubuntu (pide `sudo`); en otras distros hay que instalarlas a mano antes de compilar.
+- Para que el icono de bandeja se vea en **GNOME** hace falta la extensión "AppIndicator and KStatusNotifierItem Support" (en Ubuntu viene preinstalada y activa por defecto).
 
 ## Desinstalar
 
