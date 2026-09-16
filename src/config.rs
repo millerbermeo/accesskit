@@ -120,7 +120,7 @@ impl Default for ThemeConfig {
             background_color: DEFAULT_BACKGROUND_COLOR.to_owned(),
             text_color: DEFAULT_TEXT_COLOR.to_owned(),
             ring_background_color: DEFAULT_RING_BACKGROUND_COLOR.to_owned(),
-            ring_width: 6.0,
+            ring_width: 3.6,
         }
     }
 }
@@ -167,7 +167,7 @@ pub struct WidgetConfig {
 impl Default for WidgetConfig {
     fn default() -> Self {
         Self {
-            size: 84.0,
+            size: 50.4,
             opacity: 0.90,
             always_on_top: true,
             show_label: true,

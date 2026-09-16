@@ -217,8 +217,12 @@ impl eframe::App for HaloApp {
         self.maybe_save_positions();
 
         // Repintado bajo demanda: ~60 FPS solo mientras anima; si no, se duerme
-        // hasta el próximo refresco de métricas para no consumir CPU.
-        if self.animating {
+        // hasta el próximo refresco de métricas para no consumir CPU. Con el
+        // botón del ratón pulsado forzamos el ritmo rápido también: si no,
+        // el primer tramo de un arrastre puede caer en un frame dormido y
+        // ViewportCommand::StartDrag llega tarde, perdiendo el gesto.
+        let pointer_down = ctx.input(|input| input.pointer.any_down());
+        if self.animating || pointer_down {
             ctx.request_repaint_after(FRAME_DURATION);
         } else {
             let remaining = REFRESH_INTERVAL.saturating_sub(self.last_refresh.elapsed());
