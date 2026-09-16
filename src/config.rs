@@ -93,6 +93,9 @@ impl Config {
 
     /// Guarda la configuración en `path`.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let contents = toml::to_string_pretty(self)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
         fs::write(path, contents)

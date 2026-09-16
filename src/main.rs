@@ -5,6 +5,7 @@ mod config;
 mod metrics;
 mod widgets;
 
+use std::env;
 use std::path::PathBuf;
 
 use eframe::egui::{ViewportBuilder, WindowLevel};
@@ -12,16 +13,29 @@ use eframe::egui::{ViewportBuilder, WindowLevel};
 use app::HaloApp;
 use config::Config;
 
-const CONFIG_PATH: &str = "config.toml";
+/// Ruta del config: `$XDG_CONFIG_HOME/halo/config.toml` o `~/.config/halo/config.toml`.
+/// Si no hay `HOME`, cae en `config.toml` junto al directorio de trabajo actual.
+fn config_path() -> PathBuf {
+    if let Ok(xdg) = env::var("XDG_CONFIG_HOME") {
+        return PathBuf::from(xdg).join("halo/config.toml");
+    }
+    if let Ok(home) = env::var("HOME") {
+        return PathBuf::from(home).join(".config/halo/config.toml");
+    }
+    PathBuf::from("config.toml")
+}
 
 fn main() -> eframe::Result<()> {
-    let config_path = PathBuf::from(CONFIG_PATH);
+    let config_path = config_path();
     let config = Config::load_or_create(&config_path);
 
     // El primer widget habilitado se pinta en la ventana raíz.
     let enabled = config.enabled_kinds();
     let Some(&root_kind) = enabled.first() else {
-        eprintln!("halo: no hay ninguna métrica habilitada en {CONFIG_PATH}");
+        eprintln!(
+            "halo: no hay ninguna métrica habilitada en {}",
+            config_path.display()
+        );
         std::process::exit(1);
     };
 

@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Instalador de halo: descarga el código fuente, lo compila y coloca el
+# binario en el PATH del usuario. Pensado para ejecutarse vía:
+#   curl -fsSL https://raw.githubusercontent.com/millerbermeo/accesskit/main/install.sh | bash
+set -euo pipefail
+
+REPO_URL="https://github.com/millerbermeo/accesskit.git"
+SRC_DIR="${HALO_SRC_DIR:-$HOME/.local/share/halo/src}"
+BIN_DIR="${HALO_BIN_DIR:-$HOME/.local/bin}"
+
+echo "==> Instalando halo"
+
+if ! command -v git >/dev/null 2>&1; then
+    echo "error: falta 'git'. Instálalo con el gestor de paquetes de tu sistema." >&2
+    exit 1
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "==> Rust/cargo no encontrado, instalando con rustup..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+    # shellcheck disable=SC1091
+    source "$HOME/.cargo/env"
+fi
+
+if [ -d "$SRC_DIR/.git" ]; then
+    echo "==> Actualizando código fuente en $SRC_DIR"
+    git -C "$SRC_DIR" fetch --depth 1 origin main
+    git -C "$SRC_DIR" reset --hard origin/main
+else
+    echo "==> Descargando código fuente en $SRC_DIR"
+    mkdir -p "$(dirname "$SRC_DIR")"
+    git clone --depth 1 "$REPO_URL" "$SRC_DIR"
+fi
+
+echo "==> Compilando (release, puede tardar unos minutos)"
+cargo build --release --manifest-path "$SRC_DIR/Cargo.toml"
+
+mkdir -p "$BIN_DIR"
+install -m 755 "$SRC_DIR/target/release/halo" "$BIN_DIR/halo"
+
+echo "==> halo instalado en $BIN_DIR/halo"
+
+case ":$PATH:" in
+    *":$BIN_DIR:"*) ;;
+    *)
+        echo "==> '$BIN_DIR' no está en tu PATH. Agrega esto a tu ~/.bashrc o ~/.zshrc:"
+        echo "    export PATH=\"$BIN_DIR:\$PATH\""
+        ;;
+esac
+
+echo "==> Listo. Ejecuta 'halo' para iniciar."
