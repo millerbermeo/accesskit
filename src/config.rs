@@ -120,7 +120,7 @@ impl Default for ThemeConfig {
             background_color: DEFAULT_BACKGROUND_COLOR.to_owned(),
             text_color: DEFAULT_TEXT_COLOR.to_owned(),
             ring_background_color: DEFAULT_RING_BACKGROUND_COLOR.to_owned(),
-            ring_width: 10.0,
+            ring_width: 6.0,
         }
     }
 }

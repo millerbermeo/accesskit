@@ -7,7 +7,7 @@ progress_color = "#E63027"
 background_color = "#202020"
 text_color = "#FFFFFF"
 ring_background_color = "#3A3A3A"
-ring_width = 10.0
+ring_width = 6.0
 
 [widget]
 size = 84.0
