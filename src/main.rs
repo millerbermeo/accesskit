@@ -26,6 +26,20 @@ fn config_path() -> PathBuf {
     PathBuf::from("config.toml")
 }
 
+/// Fuerza a winit a usar el backend X11 (vía XWayland si la sesión es
+/// Wayland) quitando `WAYLAND_DISPLAY` del entorno antes de que arranque.
+/// El "always on top" de halo depende de EWMH (`_NET_WM_STATE_ABOVE`), que
+/// los compositores Wayland no exponen a apps normales; Mutter y KWin sí lo
+/// aplican a las ventanas X11 que gestionan vía XWayland. No cambia nada de
+/// la sesión de escritorio del usuario, solo cómo se conecta este proceso.
+fn force_x11_backend() {
+    // SAFETY: se llama al inicio de main(), antes de crear cualquier hilo
+    // (tray::spawn) o abrir una conexión de pantalla.
+    unsafe {
+        env::remove_var("WAYLAND_DISPLAY");
+    }
+}
+
 /// Desatacha el proceso de la terminal (fork + setsid + stdio a `/dev/null`),
 /// para que `halo` alcance como comando único y sobreviva al cierre de la
 /// terminal. Debe llamarse antes de crear hilos o conexiones (X11, GTK), ya
@@ -43,6 +57,7 @@ fn daemonize() {
 }
 
 fn main() -> eframe::Result<()> {
+    force_x11_backend();
     daemonize();
     tray::spawn();
 
