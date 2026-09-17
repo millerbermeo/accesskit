@@ -71,11 +71,6 @@ struct WidgetState {
     /// `true` si `position` fue cambiada por código (agrupado) y su ventana
     /// todavía no fue movida ahí; se reafirma una vez y se limpia.
     needs_apply: bool,
-    /// Posición reportada por el gestor de ventanas en el frame anterior,
-    /// mientras hay un arrastre nativo en curso (ver `ViewportCommand::StartDrag`
-    /// en `show_widget`). Sirve para calcular cuánto se movió este frame y
-    /// aplicar el mismo delta al resto del grupo.
-    drag_prev_outer: Option<Pos2>,
 }
 
 impl WidgetState {
@@ -89,7 +84,6 @@ impl WidgetState {
             anim_start: Instant::now() - ANIMATION_DURATION,
             position: position.map(|[x, y]| Pos2::new(x, y)),
             needs_apply: false,
-            drag_prev_outer: None,
         }
     }
 
@@ -201,25 +195,27 @@ impl HaloApp {
     }
 
     /// Desplaza todos los widgets por el mismo delta (arrastre en grupo).
-    /// Como las ventanas no tienen decoraciones, moverlas depende de este
-    /// comando explícito — salvo la que originó el delta (`skip_index`):
-    /// esa la está moviendo el gestor de ventanas de forma nativa (ver
-    /// `show_widget`), así que mandarle también un `OuterPosition` pelearía
-    /// con ese movimiento y la haría vibrar.
-    fn apply_group_delta(&mut self, delta: Vec2, skip_index: Option<usize>) {
+    /// Como las ventanas no tienen decoraciones, moverlas depende
+    /// enteramente de este comando explícito; por eso se aplica a todas por
+    /// igual, incluida la que se está arrastrando. Se probó dejarle el
+    /// movimiento de esa al gestor de ventanas vía `ViewportCommand::
+    /// StartDrag` (más suave en teoría), pero Mutter no lo garantiza para
+    /// ventanas sin barra de título / fuera de la taskbar como estas: a
+    /// veces simplemente no la mueve, dejando el arrastre completamente
+    /// muerto. Mejor 100% manual y confiable que "a veces perfecto, a veces
+    /// nada".
+    fn apply_group_delta(&mut self, delta: Vec2) {
         if delta.length_sq() == 0.0 {
             return;
         }
         let mut config = self.shared.config.lock().unwrap();
-        for (i, widget) in self.widgets.iter_mut().enumerate() {
+        for widget in &mut self.widgets {
             let Some(pos) = widget.position else {
                 continue;
             };
             let moved = pos + delta;
             widget.position = Some(moved);
-            if Some(i) != skip_index {
-                widget.needs_apply = true;
-            }
+            widget.needs_apply = true;
             config.metric_mut(widget.kind).position = Some([moved.x, moved.y]);
         }
         drop(config);
@@ -376,6 +372,14 @@ impl HaloApp {
 
                 animating = widget.tick_animation();
 
+                // Las ventanas no tienen decoraciones ni barra de título, así
+                // que mover el grupo depende enteramente de este delta: no
+                // hay ningún "arrastre nativo" del gestor de ventanas de por
+                // medio (eso rompía cuando ese gestor tenía el puntero
+                // agarrado en exclusiva para SU propio arrastre, o
+                // directamente ignoraba el pedido de mover una ventana sin
+                // barra de título / fuera de la taskbar, dejando el
+                // arrastre completamente muerto).
                 let response = CircularProgress::new(
                     widget.current,
                     label,
@@ -386,40 +390,17 @@ impl HaloApp {
                     widget_cfg.show_label,
                 )
                 .show(viewport_ui);
+                if response.dragged() {
+                    let delta = response.drag_delta();
+                    if delta != Vec2::ZERO {
+                        drag_delta = Some(delta);
+                    }
+                }
 
                 outer_position = viewport_ui
                     .ctx()
                     .input(|input| input.viewport().outer_rect)
                     .map(|rect| rect.min);
-
-                // Al empezar a arrastrar, se le pide al gestor de ventanas
-                // que mueva ESTA ventana de forma nativa (suave, sin
-                // depender de nuestro ritmo de repintado ni de que los
-                // eventos de ratón nos lleguen a tiempo). El resto del grupo
-                // no puede moverse igual (el gestor tiene el puntero
-                // agarrado para SU propio arrastre), así que las hermanas
-                // siguen a mano (`apply_group_delta`) usando el delta real
-                // que el gestor va reportando en `outer_rect` cuadro a
-                // cuadro — eso sí sigue llegando durante el arrastre nativo,
-                // a diferencia de los eventos de puntero.
-                if response.drag_started() {
-                    viewport_ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
-                    widget.drag_prev_outer = outer_position.or(widget.position);
-                }
-
-                if response.dragged()
-                    && let (Some(prev), Some(current)) = (widget.drag_prev_outer, outer_position)
-                {
-                    let delta = current - prev;
-                    if delta != Vec2::ZERO {
-                        drag_delta = Some(delta);
-                    }
-                    widget.drag_prev_outer = outer_position;
-                }
-
-                if response.drag_stopped() {
-                    widget.drag_prev_outer = None;
-                }
 
                 // Estado del ratón *de este viewport concreto*: cada ventana
                 // de widget solo recibe eventos cuando el puntero está sobre
@@ -493,12 +474,12 @@ impl eframe::App for HaloApp {
             let (widget_animating, delta, pointer_down) = self.show_widget(&ctx, index);
             animating |= widget_animating;
             dragging |= pointer_down;
-            if let Some(delta) = delta {
-                group_delta = Some((index, delta));
+            if delta.is_some() {
+                group_delta = delta;
             }
         }
-        if let Some((origin_index, delta)) = group_delta {
-            self.apply_group_delta(delta, Some(origin_index));
+        if let Some(delta) = group_delta {
+            self.apply_group_delta(delta);
         }
         self.animating = animating;
         self.dragging = dragging;
