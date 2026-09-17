@@ -1,55 +1,28 @@
-//! Icono de halo: un anillo de progreso parcial, igual al estilo de los
-//! widgets, generado por código (sin depender de ningún archivo de imagen).
+//! Icono de halo: carga el logo oficial (`logo.png`, embebido en el binario)
+//! y lo escala al tamaño pedido (bandeja del sistema, etc).
 
-use std::f32::consts::{FRAC_PI_2, TAU};
+use std::sync::OnceLock;
 
-const BACKGROUND: [u8; 4] = [0x20, 0x20, 0x20, 0xFF];
-const RING_BACKGROUND: [u8; 4] = [0x3A, 0x3A, 0x3A, 0xFF];
-const PROGRESS: [u8; 4] = [0xE6, 0x30, 0x27, 0xFF];
-/// Fracción de arco pintada de color de progreso; puramente decorativo.
-const PROGRESS_FRACTION: f32 = 0.7;
+use image::imageops::FilterType;
+use image::RgbaImage;
 
-/// Genera un icono cuadrado de `size` x `size` píxeles en RGBA, con bordes
-/// suavizados (antialiasing analítico por cobertura de distancia).
+static LOGO_BYTES: &[u8] = include_bytes!("../logo.png");
+
+fn logo() -> &'static RgbaImage {
+    static LOGO: OnceLock<RgbaImage> = OnceLock::new();
+    LOGO.get_or_init(|| {
+        image::load_from_memory(LOGO_BYTES)
+            .expect("halo: logo.png inválido o corrupto")
+            .into_rgba8()
+    })
+}
+
+/// Devuelve el logo de halo escalado a `size` x `size` píxeles, en RGBA
+/// contiguo (fila por fila), listo para `TrayIcon::from_rgba` / `IconData`.
 pub fn rgba(size: u32) -> Vec<u8> {
-    let center = size as f32 / 2.0;
-    let outer_r = center - 1.0;
-    let ring_width = (size as f32 * 0.16).max(2.0);
-    let inner_r = outer_r - ring_width;
-    let start_angle = -FRAC_PI_2; // el arco arranca arriba, como en los widgets.
-    let sweep = TAU * PROGRESS_FRACTION;
-
-    let mut out = vec![0u8; (size * size * 4) as usize];
-    for y in 0..size {
-        for x in 0..size {
-            let dx = x as f32 + 0.5 - center;
-            let dy = y as f32 + 0.5 - center;
-            let dist = (dx * dx + dy * dy).sqrt();
-            let coverage = (outer_r + 0.5 - dist).clamp(0.0, 1.0);
-            if coverage <= 0.0 {
-                continue; // queda transparente
-            }
-
-            let color = if dist >= inner_r {
-                let mut angle = dy.atan2(dx) - start_angle;
-                if angle < 0.0 {
-                    angle += TAU;
-                }
-                if angle <= sweep {
-                    PROGRESS
-                } else {
-                    RING_BACKGROUND
-                }
-            } else {
-                BACKGROUND
-            };
-
-            let idx = ((y * size + x) * 4) as usize;
-            out[idx] = color[0];
-            out[idx + 1] = color[1];
-            out[idx + 2] = color[2];
-            out[idx + 3] = (color[3] as f32 * coverage).round() as u8;
-        }
+    let logo = logo();
+    if logo.width() == size && logo.height() == size {
+        return logo.as_raw().clone();
     }
-    out
+    image::imageops::resize(logo, size, size, FilterType::Lanczos3).into_raw()
 }

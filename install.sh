@@ -7,6 +7,8 @@ set -euo pipefail
 REPO_URL="https://github.com/millerbermeo/accesskit.git"
 SRC_DIR="${HALO_SRC_DIR:-$HOME/.local/share/halo/src}"
 BIN_DIR="${HALO_BIN_DIR:-$HOME/.local/bin}"
+ICON_DIR="$HOME/.local/share/icons"
+DESKTOP_DIR="$HOME/.local/share/applications"
 
 echo "==> Instalando halo"
 
@@ -48,6 +50,22 @@ cargo build --release --manifest-path "$SRC_DIR/Cargo.toml"
 
 mkdir -p "$BIN_DIR"
 install -m 755 "$SRC_DIR/target/release/halo" "$BIN_DIR/halo"
+
+echo "==> Instalando icono y lanzador de escritorio"
+mkdir -p "$ICON_DIR" "$DESKTOP_DIR"
+install -m 644 "$SRC_DIR/logo.png" "$ICON_DIR/halo.png"
+cat > "$DESKTOP_DIR/halo.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=halo
+Comment=Widgets circulares para monitorizar CPU, RAM, disco y GPU
+Exec=$BIN_DIR/halo
+Icon=$ICON_DIR/halo.png
+Terminal=false
+Categories=Utility;System;Monitor;
+EOF
+command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q "$ICON_DIR" 2>/dev/null || true
+command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q "$DESKTOP_DIR" 2>/dev/null || true
 
 echo "==> halo instalado en $BIN_DIR/halo"
 
