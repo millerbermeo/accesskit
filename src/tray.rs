@@ -105,8 +105,11 @@ fn set_autostart(enabled: bool) {
             eprintln!("halo: no se pudo crear {}: {err}", parent.display());
             return;
         }
+        let icon_path = env::var("HOME")
+            .map(|home| format!("{home}/.local/share/icons/halo.png"))
+            .unwrap_or_else(|_| "halo".to_string());
         let contents = format!(
-            "[Desktop Entry]\nType=Application\nName=halo\nExec={}\nX-GNOME-Autostart-enabled=true\nNoDisplay=true\n",
+            "[Desktop Entry]\nType=Application\nName=halo\nExec={}\nIcon={icon_path}\nX-GNOME-Autostart-enabled=true\nNoDisplay=true\n",
             exe.display()
         );
         if let Err(err) = fs::write(&path, contents) {
@@ -277,7 +280,15 @@ pub fn spawn(shared: Arc<SharedState>) {
                         shared.save();
                         shared.request_repaint();
                     }
-                    Some(Action::Quit) => std::process::exit(0),
+                    Some(Action::Quit) => {
+                        // Vuelca cualquier cambio pendiente (p. ej. una
+                        // posición recién arrastrada, todavía dentro de la
+                        // ventana de debounce de `HaloApp`) antes de matar
+                        // el proceso: `process::exit` no le da chance al
+                        // guardado debounced de correr.
+                        shared.save();
+                        std::process::exit(0);
+                    }
                     Some(Action::ToggleShow(kind, item)) => {
                         let enabled = item.is_checked();
                         shared.config.lock().unwrap().metric_mut(*kind).enabled = enabled;

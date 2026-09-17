@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use eframe::egui::Context;
+use eframe::egui::{Context, ViewportId};
 
 use crate::config::Config;
 
@@ -40,10 +40,17 @@ impl SharedState {
         }
     }
 
-    /// Pide un repintado inmediato (por ejemplo, tras un cambio desde la bandeja).
+    /// Pide un repintado inmediato (por ejemplo, tras un cambio desde la
+    /// bandeja). Siempre apunta al viewport ROOT explícitamente: este método
+    /// se llama desde el hilo de la bandeja (GTK), distinto del hilo de
+    /// egui/eframe, y `ctx.request_repaint()` sin especificar viewport lee
+    /// una pila de viewports compartida entre hilos que puede estar
+    /// apuntando a otro viewport justo en ese instante (carrera). ROOT es
+    /// además el único viewport que realmente dispara el repintado: los
+    /// widgets son viewports inmediatos, anidados dentro del `ui()` de ROOT.
     pub fn request_repaint(&self) {
         if let Some(ctx) = self.ctx.lock().unwrap().as_ref() {
-            ctx.request_repaint();
+            ctx.request_repaint_of(ViewportId::ROOT);
         }
     }
 }

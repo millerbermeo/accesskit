@@ -38,6 +38,12 @@ pub struct HaloApp {
     /// Orientación del frame anterior, para detectar el cambio y realinear
     /// justo en ese momento (no en cada frame).
     last_orientation: Orientation,
+    /// `true` si algún widget tiene el botón del ratón apretado sobre él,
+    /// calculado en el `ui()` de este frame para pacer el `logic()` del
+    /// próximo. No puede leerse desde `logic()` directamente: `ctx.input()`
+    /// ahí refleja el viewport ROOT (la ventana fantasma invisible), no las
+    /// ventanas de los widgets, así que siempre daría `false`.
+    dragging: bool,
 }
 
 /// Estado de un widget: su métrica, la animación y la posición de su ventana.
@@ -113,6 +119,7 @@ impl HaloApp {
             positions_dirty: false,
             last_save: Instant::now(),
             last_orientation,
+            dragging: false,
         }
     }
 
@@ -257,7 +264,7 @@ impl HaloApp {
     /// Pinta el widget `index` en su propia ventana. Devuelve si está
     /// animando y, si el usuario lo arrastró este frame, cuánto se movió
     /// (para desplazar al resto del grupo la misma cantidad).
-    fn show_widget(&mut self, ctx: &Context, index: usize) -> (bool, Option<Vec2>) {
+    fn show_widget(&mut self, ctx: &Context, index: usize) -> (bool, Option<Vec2>, bool) {
         let kind = self.widgets[index].kind;
         let (widget_cfg, theme, progress_color) = {
             let config = self.shared.config.lock().unwrap();
@@ -271,6 +278,7 @@ impl HaloApp {
         let mut animating = false;
         let mut drag_delta = None;
         let mut outer_position = None;
+        let mut pointer_down = false;
         ctx.show_viewport_immediate(
             ViewportId::from_hash_of(widget.kind.id()),
             builder,
@@ -325,6 +333,12 @@ impl HaloApp {
                     .ctx()
                     .input(|input| input.viewport().outer_rect)
                     .map(|rect| rect.min);
+
+                // Estado del ratón *de este viewport concreto*: cada ventana
+                // de widget solo recibe eventos cuando el puntero está sobre
+                // ella, así que esto sí refleja si se está arrastrando (a
+                // diferencia de leerlo desde el ROOT en `logic()`).
+                pointer_down = viewport_ui.ctx().input(|input| input.pointer.any_down());
             },
         );
 
@@ -336,7 +350,7 @@ impl HaloApp {
             self.bootstrap_position(index, pos);
         }
 
-        (animating, drag_delta)
+        (animating, drag_delta, pointer_down)
     }
 }
 
@@ -355,11 +369,13 @@ impl eframe::App for HaloApp {
 
         // Repintado bajo demanda: ~60 FPS solo mientras anima; si no, se duerme
         // hasta el próximo refresco de métricas para no consumir CPU. Con el
-        // botón del ratón pulsado forzamos el ritmo rápido también: si no,
-        // el primer tramo de un arrastre puede caer en un frame dormido y
-        // ViewportCommand::StartDrag llega tarde, perdiendo el gesto.
-        let pointer_down = ctx.input(|input| input.pointer.any_down());
-        if self.animating || pointer_down {
+        // botón del ratón pulsado sobre algún widget forzamos el ritmo rápido
+        // también: las ventanas de widget son viewports inmediatos, así que
+        // solo se repintan cuando repinta el ROOT (ver `HaloApp::dragging`);
+        // sin esto, un arrastre que empieza fuera de una animación de
+        // métrica queda a merced del repintado lento (hasta 1s) y se siente
+        // trabado o "no agarra".
+        if self.animating || self.dragging {
             ctx.request_repaint_after(FRAME_DURATION);
         } else {
             let remaining = REFRESH_INTERVAL.saturating_sub(self.last_refresh.elapsed());
@@ -376,9 +392,11 @@ impl eframe::App for HaloApp {
         let ctx = ui.ctx().clone();
         let mut animating = false;
         let mut group_delta = None;
+        let mut dragging = false;
         for index in 0..self.widgets.len() {
-            let (widget_animating, delta) = self.show_widget(&ctx, index);
+            let (widget_animating, delta, pointer_down) = self.show_widget(&ctx, index);
             animating |= widget_animating;
+            dragging |= pointer_down;
             if delta.is_some() {
                 group_delta = delta;
             }
@@ -387,6 +405,7 @@ impl eframe::App for HaloApp {
             self.apply_group_delta(delta);
         }
         self.animating = animating;
+        self.dragging = dragging;
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
