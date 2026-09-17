@@ -25,6 +25,11 @@ const FRAME_DURATION: Duration = Duration::from_millis(20);
 const MIN_IDLE_DELAY: Duration = Duration::from_millis(50);
 /// Espera mínima entre guardados de posiciones en disco.
 const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
+/// Separación de los bordes de la pantalla al ubicar el grupo por primera
+/// vez (instalación nueva, sin posiciones guardadas todavía).
+const SCREEN_MARGIN: f32 = 24.0;
+/// Separación entre widgets consecutivos del grupo.
+const GROUP_GAP: f32 = 12.0;
 
 pub struct HaloApp {
     shared: Arc<SharedState>,
@@ -44,6 +49,11 @@ pub struct HaloApp {
     /// ahí refleja el viewport ROOT (la ventana fantasma invisible), no las
     /// ventanas de los widgets, así que siempre daría `false`.
     dragging: bool,
+    /// `true` hasta que el widget ancla reciba una posición inicial: en una
+    /// instalación nueva (sin `config.toml` previo) se resuelve una sola vez
+    /// contra el tamaño de pantalla; si ya había posiciones guardadas, queda
+    /// en `false` desde el arranque y no hace nada.
+    initial_placement_pending: bool,
 }
 
 /// Estado de un widget: su métrica, la animación y la posición de su ventana.
@@ -61,6 +71,11 @@ struct WidgetState {
     /// `true` si `position` fue cambiada por código (agrupado) y su ventana
     /// todavía no fue movida ahí; se reafirma una vez y se limpia.
     needs_apply: bool,
+    /// Posición reportada por el gestor de ventanas en el frame anterior,
+    /// mientras hay un arrastre nativo en curso (ver `ViewportCommand::StartDrag`
+    /// en `show_widget`). Sirve para calcular cuánto se movió este frame y
+    /// aplicar el mismo delta al resto del grupo.
+    drag_prev_outer: Option<Pos2>,
 }
 
 impl WidgetState {
@@ -74,6 +89,7 @@ impl WidgetState {
             anim_start: Instant::now() - ANIMATION_DURATION,
             position: position.map(|[x, y]| Pos2::new(x, y)),
             needs_apply: false,
+            drag_prev_outer: None,
         }
     }
 
@@ -100,7 +116,7 @@ impl HaloApp {
         system.refresh_cpu_usage();
         system.refresh_memory();
 
-        let (widgets, last_orientation) = {
+        let (widgets, last_orientation): (Vec<WidgetState>, Orientation) = {
             let config = shared.config.lock().unwrap();
             let widgets = config
                 .enabled_kinds()
@@ -109,6 +125,10 @@ impl HaloApp {
                 .collect();
             (widgets, config.widget.orientation)
         };
+
+        // Instalación nueva: ningún widget trae posición guardada todavía.
+        // Si al menos uno ya tiene una (config existente), no se toca nada.
+        let initial_placement_pending = widgets.iter().all(|w| w.position.is_none());
 
         Self {
             shared,
@@ -120,6 +140,7 @@ impl HaloApp {
             last_save: Instant::now(),
             last_orientation,
             dragging: false,
+            initial_placement_pending,
         }
     }
 
@@ -180,21 +201,25 @@ impl HaloApp {
     }
 
     /// Desplaza todos los widgets por el mismo delta (arrastre en grupo).
-    /// Como las ventanas no tienen decoraciones, moverlas depende
-    /// enteramente de este comando explícito; por eso se aplica a todas por
-    /// igual, incluida la que se está arrastrando.
-    fn apply_group_delta(&mut self, delta: Vec2) {
+    /// Como las ventanas no tienen decoraciones, moverlas depende de este
+    /// comando explícito — salvo la que originó el delta (`skip_index`):
+    /// esa la está moviendo el gestor de ventanas de forma nativa (ver
+    /// `show_widget`), así que mandarle también un `OuterPosition` pelearía
+    /// con ese movimiento y la haría vibrar.
+    fn apply_group_delta(&mut self, delta: Vec2, skip_index: Option<usize>) {
         if delta.length_sq() == 0.0 {
             return;
         }
         let mut config = self.shared.config.lock().unwrap();
-        for widget in &mut self.widgets {
+        for (i, widget) in self.widgets.iter_mut().enumerate() {
             let Some(pos) = widget.position else {
                 continue;
             };
             let moved = pos + delta;
             widget.position = Some(moved);
-            widget.needs_apply = true;
+            if Some(i) != skip_index {
+                widget.needs_apply = true;
+            }
             config.metric_mut(widget.kind).position = Some([moved.x, moved.y]);
         }
         drop(config);
@@ -204,7 +229,6 @@ impl HaloApp {
     /// Alinea todos los widgets en fila (horizontal) o columna (vertical)
     /// junto al primero, que no se mueve.
     fn align_group(&mut self, size: f32, orientation: Orientation) {
-        const GAP: f32 = 12.0;
         let anchor = self
             .widgets
             .first()
@@ -213,7 +237,7 @@ impl HaloApp {
 
         let mut config = self.shared.config.lock().unwrap();
         for (i, widget) in self.widgets.iter_mut().enumerate().skip(1) {
-            let offset = i as f32 * (size + GAP);
+            let offset = i as f32 * (size + GROUP_GAP);
             let target = match orientation {
                 Orientation::Horizontal => anchor + Vec2::new(offset, 0.0),
                 Orientation::Vertical => anchor + Vec2::new(0.0, offset),
@@ -224,6 +248,52 @@ impl HaloApp {
         }
         drop(config);
         self.positions_dirty = true;
+    }
+
+    /// Ubica el grupo en la esquina inferior derecha de la pantalla, con
+    /// margen de los bordes, en vez de dejar que el gestor de ventanas
+    /// elija dónde poner cada ventana nueva (normalmente el centro o la
+    /// esquina superior izquierda). Solo actúa una vez, en la primera
+    /// instalación; `align_group` ya se encarga de acomodar al resto del
+    /// grupo junto al ancla.
+    fn place_group_bottom_right(&mut self, ctx: &Context, size: f32, orientation: Orientation) {
+        if !self.initial_placement_pending {
+            return;
+        }
+        let Some(monitor_size) = ctx.input(|i| i.viewport().monitor_size) else {
+            return; // Sin info de monitor todavía; se reintenta el próximo frame.
+        };
+        if monitor_size.x <= 1.0 || monitor_size.y <= 1.0 {
+            return;
+        }
+        if self.widgets.is_empty() {
+            self.initial_placement_pending = false;
+            return;
+        }
+
+        // El ancla es el primero del grupo y `align_group` extiende al
+        // resto hacia la derecha (horizontal) o hacia abajo (vertical); para
+        // que el GRUPO ENTERO termine pegado a la esquina inferior derecha
+        // (no solo el ancla, que dejaría a los demás fuera de pantalla), se
+        // retrocede el ancla el ancho total del grupo menos un widget.
+        let span = (self.widgets.len() - 1) as f32 * (size + GROUP_GAP);
+        let (anchor_x, anchor_y) = match orientation {
+            Orientation::Horizontal => (
+                (monitor_size.x - size - SCREEN_MARGIN - span).max(SCREEN_MARGIN),
+                (monitor_size.y - size - SCREEN_MARGIN).max(SCREEN_MARGIN),
+            ),
+            Orientation::Vertical => (
+                (monitor_size.x - size - SCREEN_MARGIN).max(SCREEN_MARGIN),
+                (monitor_size.y - size - SCREEN_MARGIN - span).max(SCREEN_MARGIN),
+            ),
+        };
+        let position = Pos2::new(anchor_x, anchor_y);
+        let kind = self.widgets[0].kind;
+        self.widgets[0].position = Some(position);
+        self.shared.config.lock().unwrap().metric_mut(kind).position = Some([position.x, position.y]);
+        self.align_group(size, orientation);
+        self.positions_dirty = true;
+        self.initial_placement_pending = false;
     }
 
     fn maybe_save_positions(&mut self) {
@@ -306,12 +376,6 @@ impl HaloApp {
 
                 animating = widget.tick_animation();
 
-                // Las ventanas no tienen decoraciones ni barra de título, así
-                // que mover el grupo depende enteramente de este delta: no
-                // hay ningún "arrastre nativo" del gestor de ventanas de por
-                // medio (eso rompía cuando ese gestor tenía el puntero
-                // agarrado en exclusiva para SU propio arrastre, dejando a
-                // los demás sin poder moverse esa vez).
                 let response = CircularProgress::new(
                     widget.current,
                     label,
@@ -322,17 +386,40 @@ impl HaloApp {
                     widget_cfg.show_label,
                 )
                 .show(viewport_ui);
-                if response.dragged() {
-                    let delta = response.drag_delta();
-                    if delta != Vec2::ZERO {
-                        drag_delta = Some(delta);
-                    }
-                }
 
                 outer_position = viewport_ui
                     .ctx()
                     .input(|input| input.viewport().outer_rect)
                     .map(|rect| rect.min);
+
+                // Al empezar a arrastrar, se le pide al gestor de ventanas
+                // que mueva ESTA ventana de forma nativa (suave, sin
+                // depender de nuestro ritmo de repintado ni de que los
+                // eventos de ratón nos lleguen a tiempo). El resto del grupo
+                // no puede moverse igual (el gestor tiene el puntero
+                // agarrado para SU propio arrastre), así que las hermanas
+                // siguen a mano (`apply_group_delta`) usando el delta real
+                // que el gestor va reportando en `outer_rect` cuadro a
+                // cuadro — eso sí sigue llegando durante el arrastre nativo,
+                // a diferencia de los eventos de puntero.
+                if response.drag_started() {
+                    viewport_ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+                    widget.drag_prev_outer = outer_position.or(widget.position);
+                }
+
+                if response.dragged()
+                    && let (Some(prev), Some(current)) = (widget.drag_prev_outer, outer_position)
+                {
+                    let delta = current - prev;
+                    if delta != Vec2::ZERO {
+                        drag_delta = Some(delta);
+                    }
+                    widget.drag_prev_outer = outer_position;
+                }
+
+                if response.drag_stopped() {
+                    widget.drag_prev_outer = None;
+                }
 
                 // Estado del ratón *de este viewport concreto*: cada ventana
                 // de widget solo recibe eventos cuando el puntero está sobre
@@ -390,6 +477,15 @@ impl eframe::App for HaloApp {
         self.sync();
 
         let ctx = ui.ctx().clone();
+
+        if self.initial_placement_pending {
+            let (size, orientation) = {
+                let config = self.shared.config.lock().unwrap();
+                (config.widget.size, config.widget.orientation)
+            };
+            self.place_group_bottom_right(&ctx, size, orientation);
+        }
+
         let mut animating = false;
         let mut group_delta = None;
         let mut dragging = false;
@@ -397,12 +493,12 @@ impl eframe::App for HaloApp {
             let (widget_animating, delta, pointer_down) = self.show_widget(&ctx, index);
             animating |= widget_animating;
             dragging |= pointer_down;
-            if delta.is_some() {
-                group_delta = delta;
+            if let Some(delta) = delta {
+                group_delta = Some((index, delta));
             }
         }
-        if let Some(delta) = group_delta {
-            self.apply_group_delta(delta);
+        if let Some((origin_index, delta)) = group_delta {
+            self.apply_group_delta(delta, Some(origin_index));
         }
         self.animating = animating;
         self.dragging = dragging;
