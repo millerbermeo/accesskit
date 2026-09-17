@@ -33,13 +33,23 @@ impl Default for Config {
             cpu: MetricConfig {
                 enabled: true,
                 position: None,
+                color: None,
             },
             ram: MetricConfig {
                 enabled: true,
                 position: None,
+                color: None,
             },
-            gpu: MetricConfig::default(),
-            disk: MetricConfig::default(),
+            gpu: MetricConfig {
+                enabled: true,
+                position: None,
+                color: None,
+            },
+            disk: MetricConfig {
+                enabled: true,
+                position: None,
+                color: None,
+            },
             network: MetricConfig::default(),
         }
     }
@@ -51,6 +61,8 @@ impl Config {
         match kind {
             MetricKind::Cpu => &self.cpu,
             MetricKind::Ram => &self.ram,
+            MetricKind::Disk => &self.disk,
+            MetricKind::Gpu => &self.gpu,
         }
     }
 
@@ -59,15 +71,27 @@ impl Config {
         match kind {
             MetricKind::Cpu => &mut self.cpu,
             MetricKind::Ram => &mut self.ram,
+            MetricKind::Disk => &mut self.disk,
+            MetricKind::Gpu => &mut self.gpu,
         }
     }
 
-    /// Métricas habilitadas, en orden fijo. La primera usa la ventana raíz.
+    /// Métricas habilitadas, en orden fijo.
     pub fn enabled_kinds(&self) -> Vec<MetricKind> {
-        [MetricKind::Cpu, MetricKind::Ram]
+        [MetricKind::Cpu, MetricKind::Ram, MetricKind::Disk, MetricKind::Gpu]
             .into_iter()
             .filter(|kind| self.metric(*kind).enabled)
             .collect()
+    }
+
+    /// Color del arco de progreso de una métrica: el suyo propio si tiene uno
+    /// configurado, o si no el color de progreso del tema.
+    pub fn metric_color(&self, kind: MetricKind) -> Color32 {
+        self.metric(kind)
+            .color
+            .as_deref()
+            .and_then(parse_hex_color)
+            .unwrap_or_else(|| self.theme.resolve().progress)
     }
 
     /// Carga la configuración desde `path`; si no existe, lo crea con los
@@ -162,26 +186,47 @@ pub struct WidgetConfig {
     pub opacity: f32,
     pub always_on_top: bool,
     pub show_label: bool,
+    /// Los widgets siempre se mueven juntos, en fila u en columna según esto.
+    pub orientation: Orientation,
 }
 
 impl Default for WidgetConfig {
     fn default() -> Self {
         Self {
-            size: 50.4,
+            size: 57.96, // 50.4 + 15%
             opacity: 0.90,
             always_on_top: true,
             show_label: true,
+            orientation: Orientation::Horizontal,
         }
     }
 }
 
-/// Activación y posición de una métrica concreta.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+/// Disposición del grupo de widgets: en fila (uno al lado del otro) o en
+/// columna (uno debajo del otro).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Orientation {
+    Horizontal,
+    Vertical,
+}
+
+impl Default for Orientation {
+    fn default() -> Self {
+        Self::Horizontal
+    }
+}
+
+/// Activación, posición y color de una métrica concreta.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MetricConfig {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<[f32; 2]>,
+    /// Color del arco de progreso, en "#RRGGBB". `None` usa `theme.progress_color`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 /// Identificador tipado de cada métrica soportada.
@@ -189,6 +234,8 @@ pub struct MetricConfig {
 pub enum MetricKind {
     Cpu,
     Ram,
+    Disk,
+    Gpu,
 }
 
 impl MetricKind {
@@ -197,6 +244,8 @@ impl MetricKind {
         match self {
             Self::Cpu => "cpu",
             Self::Ram => "ram",
+            Self::Disk => "disk",
+            Self::Gpu => "gpu",
         }
     }
 }

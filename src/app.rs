@@ -1,15 +1,16 @@
 //! Aplicación principal: ventanas de widgets, animación y refresco de métricas.
 
-use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, Context, Pos2, ViewportBuilder, ViewportCommand, ViewportId, WindowLevel,
+    self, Context, Pos2, Vec2, ViewportBuilder, ViewportCommand, ViewportId, WindowLevel,
 };
 use sysinfo::System;
 
-use crate::config::{Config, MetricKind, Theme, WidgetConfig};
+use crate::config::{MetricKind, Orientation, WidgetConfig};
 use crate::metrics::{self, Metric};
+use crate::shared::SharedState;
 use crate::widgets::CircularProgress;
 
 /// Intervalo entre lecturas de métricas.
@@ -26,9 +27,7 @@ const MIN_IDLE_DELAY: Duration = Duration::from_millis(50);
 const SAVE_DEBOUNCE: Duration = Duration::from_secs(1);
 
 pub struct HaloApp {
-    config: Config,
-    config_path: PathBuf,
-    theme: Theme,
+    shared: Arc<SharedState>,
     system: System,
     widgets: Vec<WidgetState>,
     last_refresh: Instant,
@@ -36,6 +35,9 @@ pub struct HaloApp {
     animating: bool,
     positions_dirty: bool,
     last_save: Instant,
+    /// Orientación del frame anterior, para detectar el cambio y realinear
+    /// justo en ese momento (no en cada frame).
+    last_orientation: Orientation,
 }
 
 /// Estado de un widget: su métrica, la animación y la posición de su ventana.
@@ -50,6 +52,9 @@ struct WidgetState {
     anim_start: Instant,
     /// Última posición conocida de la ventana (coordenadas de pantalla).
     position: Option<Pos2>,
+    /// `true` si `position` fue cambiada por código (agrupado) y su ventana
+    /// todavía no fue movida ahí; se reafirma una vez y se limpia.
+    needs_apply: bool,
 }
 
 impl WidgetState {
@@ -62,6 +67,7 @@ impl WidgetState {
             anim_from: 0.0,
             anim_start: Instant::now() - ANIMATION_DURATION,
             position: position.map(|[x, y]| Pos2::new(x, y)),
+            needs_apply: false,
         }
     }
 
@@ -82,28 +88,31 @@ impl WidgetState {
 }
 
 impl HaloApp {
-    pub fn new(config: Config, config_path: PathBuf) -> Self {
+    pub fn new(shared: Arc<SharedState>) -> Self {
         let mut system = System::new();
         // Primera lectura: sysinfo necesita dos refrescos para calcular el uso de CPU.
         system.refresh_cpu_usage();
         system.refresh_memory();
 
-        let widgets = config
-            .enabled_kinds()
-            .into_iter()
-            .map(|kind| WidgetState::new(kind, config.metric(kind).position))
-            .collect();
+        let (widgets, last_orientation) = {
+            let config = shared.config.lock().unwrap();
+            let widgets = config
+                .enabled_kinds()
+                .into_iter()
+                .map(|kind| WidgetState::new(kind, config.metric(kind).position))
+                .collect();
+            (widgets, config.widget.orientation)
+        };
 
         Self {
-            theme: config.theme.resolve(),
-            config,
-            config_path,
+            shared,
             system,
             widgets,
             last_refresh: Instant::now(),
             animating: true, // Animación de entrada desde 0%.
             positions_dirty: false,
             last_save: Instant::now(),
+            last_orientation,
         }
     }
 
@@ -114,14 +123,99 @@ impl HaloApp {
         }
     }
 
-    /// Registra la posición de una ventana y marca la config como modificada.
-    fn update_position(&mut self, index: usize, position: Pos2) {
+    /// Añade o quita widgets para que coincidan con las métricas habilitadas
+    /// en la configuración compartida (el menú de bandeja puede haberla
+    /// cambiado desde el último frame), y realinea el grupo si cambió el
+    /// conjunto de widgets visibles o la orientación elegida.
+    fn sync(&mut self) {
+        let (enabled, orientation, size) = {
+            let config = self.shared.config.lock().unwrap();
+            (
+                config.enabled_kinds(),
+                config.widget.orientation,
+                config.widget.size,
+            )
+        };
+
+        let before_len = self.widgets.len();
+        self.widgets.retain(|widget| enabled.contains(&widget.kind));
+        let mut set_changed = before_len != self.widgets.len();
+
+        for kind in enabled {
+            if self.widgets.iter().any(|widget| widget.kind == kind) {
+                continue;
+            }
+            let position = self.shared.config.lock().unwrap().metric(kind).position;
+            self.widgets.push(WidgetState::new(kind, position));
+            set_changed = true;
+        }
+
+        let orientation_changed = orientation != self.last_orientation;
+        self.last_orientation = orientation;
+
+        if set_changed || orientation_changed {
+            self.align_group(size, orientation);
+        }
+    }
+
+    /// Fija la posición inicial de un widget que todavía no tiene una
+    /// guardada (primera vez que aparece), sin propagarla al resto del
+    /// grupo: es solo para recordar dónde lo puso el gestor de ventanas.
+    fn bootstrap_position(&mut self, index: usize, position: Pos2) {
         let widget = &mut self.widgets[index];
-        if widget.position.is_some_and(|p| p.distance(position) < 1.0) {
+        if widget.position.is_some() {
             return;
         }
         widget.position = Some(position);
-        self.config.metric_mut(widget.kind).position = Some([position.x, position.y]);
+        let kind = widget.kind;
+        self.shared.config.lock().unwrap().metric_mut(kind).position = Some([position.x, position.y]);
+        self.positions_dirty = true;
+    }
+
+    /// Desplaza todos los widgets por el mismo delta (arrastre en grupo).
+    /// Como las ventanas no tienen decoraciones, moverlas depende
+    /// enteramente de este comando explícito; por eso se aplica a todas por
+    /// igual, incluida la que se está arrastrando.
+    fn apply_group_delta(&mut self, delta: Vec2) {
+        if delta.length_sq() == 0.0 {
+            return;
+        }
+        let mut config = self.shared.config.lock().unwrap();
+        for widget in &mut self.widgets {
+            let Some(pos) = widget.position else {
+                continue;
+            };
+            let moved = pos + delta;
+            widget.position = Some(moved);
+            widget.needs_apply = true;
+            config.metric_mut(widget.kind).position = Some([moved.x, moved.y]);
+        }
+        drop(config);
+        self.positions_dirty = true;
+    }
+
+    /// Alinea todos los widgets en fila (horizontal) o columna (vertical)
+    /// junto al primero, que no se mueve.
+    fn align_group(&mut self, size: f32, orientation: Orientation) {
+        const GAP: f32 = 12.0;
+        let anchor = self
+            .widgets
+            .first()
+            .and_then(|w| w.position)
+            .unwrap_or(Pos2::new(100.0, 100.0));
+
+        let mut config = self.shared.config.lock().unwrap();
+        for (i, widget) in self.widgets.iter_mut().enumerate().skip(1) {
+            let offset = i as f32 * (size + GAP);
+            let target = match orientation {
+                Orientation::Horizontal => anchor + Vec2::new(offset, 0.0),
+                Orientation::Vertical => anchor + Vec2::new(0.0, offset),
+            };
+            widget.position = Some(target);
+            widget.needs_apply = true;
+            config.metric_mut(widget.kind).position = Some([target.x, target.y]);
+        }
+        drop(config);
         self.positions_dirty = true;
     }
 
@@ -129,10 +223,8 @@ impl HaloApp {
         if !self.positions_dirty || self.last_save.elapsed() < SAVE_DEBOUNCE {
             return;
         }
-        match self.config.save(&self.config_path) {
-            Ok(()) => self.positions_dirty = false,
-            Err(err) => eprintln!("halo: no se pudo guardar {}: {err}", self.config_path.display()),
-        }
+        self.shared.save();
+        self.positions_dirty = false;
         self.last_save = Instant::now();
     }
 
@@ -150,6 +242,7 @@ impl HaloApp {
             .with_decorations(false)
             .with_transparent(true)
             .with_taskbar(false)
+            .with_active(false)
             .with_window_level(if widget.always_on_top {
                 WindowLevel::AlwaysOnTop
             } else {
@@ -161,53 +254,97 @@ impl HaloApp {
         builder
     }
 
-    /// Pinta el widget `index` en su propia ventana. Devuelve `true` si está animando.
-    fn show_widget(&mut self, ctx: &Context, index: usize) -> bool {
-        let theme = self.theme;
-        let widget_cfg = self.config.widget;
+    /// Pinta el widget `index` en su propia ventana. Devuelve si está
+    /// animando y, si el usuario lo arrastró este frame, cuánto se movió
+    /// (para desplazar al resto del grupo la misma cantidad).
+    fn show_widget(&mut self, ctx: &Context, index: usize) -> (bool, Option<Vec2>) {
+        let kind = self.widgets[index].kind;
+        let (widget_cfg, theme, progress_color) = {
+            let config = self.shared.config.lock().unwrap();
+            (config.widget, config.theme.resolve(), config.metric_color(kind))
+        };
         let label = self.widgets[index].metric.label();
         let position = self.widgets[index].position;
         let builder = Self::viewport_builder(widget_cfg, label, position);
 
         let widget = &mut self.widgets[index];
         let mut animating = false;
-        let mut new_position = None;
+        let mut drag_delta = None;
+        let mut outer_position = None;
         ctx.show_viewport_immediate(
             ViewportId::from_hash_of(widget.kind.id()),
             builder,
             |viewport_ui, _class| {
+                // Algunos gestores de ventanas sueltan el nivel "always on
+                // top" al hacer click sobre la ventana, así que se reafirma
+                // en cada frame.
+                viewport_ui
+                    .ctx()
+                    .send_viewport_cmd(ViewportCommand::WindowLevel(if widget_cfg.always_on_top {
+                        WindowLevel::AlwaysOnTop
+                    } else {
+                        WindowLevel::Normal
+                    }));
+
+                // Reposicionamiento forzado (alinear grupo / seguir al
+                // arrastre de otro widget); se manda una sola vez, no en
+                // cada frame.
+                if widget.needs_apply {
+                    if let Some(pos) = widget.position {
+                        viewport_ui.ctx().send_viewport_cmd(ViewportCommand::OuterPosition(pos));
+                    }
+                    widget.needs_apply = false;
+                }
+
                 animating = widget.tick_animation();
 
+                // Las ventanas no tienen decoraciones ni barra de título, así
+                // que mover el grupo depende enteramente de este delta: no
+                // hay ningún "arrastre nativo" del gestor de ventanas de por
+                // medio (eso rompía cuando ese gestor tenía el puntero
+                // agarrado en exclusiva para SU propio arrastre, dejando a
+                // los demás sin poder moverse esa vez).
                 let response = CircularProgress::new(
                     widget.current,
                     label,
                     &theme,
+                    progress_color,
                     widget_cfg.size,
                     widget_cfg.opacity,
                     widget_cfg.show_label,
                 )
                 .show(viewport_ui);
-                if response.drag_started() {
-                    viewport_ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+                if response.dragged() {
+                    let delta = response.drag_delta();
+                    if delta != Vec2::ZERO {
+                        drag_delta = Some(delta);
+                    }
                 }
 
-                new_position = viewport_ui
+                outer_position = viewport_ui
                     .ctx()
                     .input(|input| input.viewport().outer_rect)
                     .map(|rect| rect.min);
             },
         );
 
-        if let Some(position) = new_position {
-            self.update_position(index, position);
+        // Solo para la primera aparición (sin posición guardada todavía):
+        // recordar dónde lo puso el gestor de ventanas por defecto.
+        if self.widgets[index].position.is_none()
+            && let Some(pos) = outer_position
+        {
+            self.bootstrap_position(index, pos);
         }
-        animating
+
+        (animating, drag_delta)
     }
 }
 
 impl eframe::App for HaloApp {
     /// Lógica sin pintado: refresco de métricas, guardado y ritmo de repintado.
     fn logic(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        self.shared.set_context(ctx.clone());
+
         if self.last_refresh.elapsed() >= REFRESH_INTERVAL {
             self.refresh_metrics();
             self.last_refresh = Instant::now();
@@ -230,54 +367,25 @@ impl eframe::App for HaloApp {
         }
     }
 
-    /// Pintado del widget raíz y apertura de las ventanas de los demás.
+    /// Ventana raíz: no se pinta nada en ella (es una ventana fantasma, ver
+    /// `main.rs`). Cada métrica vive en su propia ventana secundaria, creada
+    /// y destruida dinámicamente según lo que esté habilitado en la config.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let theme = self.theme;
-        let widget_cfg = self.config.widget;
-        let mut animating = false;
+        self.sync();
 
-        // El primer widget habilitado usa la ventana raíz. A diferencia de las
-        // ventanas secundarias (cuyo ViewportBuilder se reaplica en cada frame
-        // vía show_viewport_immediate), la raíz solo recibe su ViewportBuilder
-        // una vez al arrancar, y algunos gestores de ventanas (p. ej. Mutter en
-        // X11) descartan el nivel "always on top" pedido antes del primer mapeo.
-        // Se reafirma en cada frame para que quede fijado igual que las demás.
-        ui.ctx()
-            .send_viewport_cmd(ViewportCommand::WindowLevel(if widget_cfg.always_on_top {
-                WindowLevel::AlwaysOnTop
-            } else {
-                WindowLevel::Normal
-            }));
-        {
-            let widget = &mut self.widgets[0];
-            animating |= widget.tick_animation();
-            let response = CircularProgress::new(
-                widget.current,
-                widget.metric.label(),
-                &theme,
-                widget_cfg.size,
-                widget_cfg.opacity,
-                widget_cfg.show_label,
-            )
-            .show(ui);
-            if response.drag_started() {
-                ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+        let ctx = ui.ctx().clone();
+        let mut animating = false;
+        let mut group_delta = None;
+        for index in 0..self.widgets.len() {
+            let (widget_animating, delta) = self.show_widget(&ctx, index);
+            animating |= widget_animating;
+            if delta.is_some() {
+                group_delta = delta;
             }
         }
-        if let Some(position) = ui
-            .ctx()
-            .input(|input| input.viewport().outer_rect)
-            .map(|rect| rect.min)
-        {
-            self.update_position(0, position);
+        if let Some(delta) = group_delta {
+            self.apply_group_delta(delta);
         }
-
-        // El resto de widgets viven en sus propias ventanas.
-        let ctx = ui.ctx().clone();
-        for index in 1..self.widgets.len() {
-            animating |= self.show_widget(&ctx, index);
-        }
-
         self.animating = animating;
     }
 

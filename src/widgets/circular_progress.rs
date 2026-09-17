@@ -14,6 +14,8 @@ pub struct CircularProgress<'a> {
     value: f32,
     label: &'a str,
     theme: &'a Theme,
+    /// Color del arco de progreso, propio de cada métrica (no viene del tema).
+    progress_color: Color32,
     size: f32,
     opacity: f32,
     show_label: bool,
@@ -24,6 +26,7 @@ impl<'a> CircularProgress<'a> {
         value: f32,
         label: &'a str,
         theme: &'a Theme,
+        progress_color: Color32,
         size: f32,
         opacity: f32,
         show_label: bool,
@@ -32,6 +35,7 @@ impl<'a> CircularProgress<'a> {
             value: value.clamp(0.0, 100.0),
             label,
             theme,
+            progress_color,
             size,
             opacity: opacity.clamp(0.0, 1.0),
             show_label,
@@ -78,7 +82,7 @@ impl<'a> CircularProgress<'a> {
                     center + ring_radius * Vec2::angled(angle)
                 })
                 .collect();
-            let color = self.apply_opacity(self.theme.progress);
+            let color = self.apply_opacity(self.progress_color);
             painter.add(Shape::line(points.clone(), Stroke::new(ring_width, color)));
             // Extremos redondeados del arco.
             painter.circle_filled(points[0], ring_width * 0.5, color);

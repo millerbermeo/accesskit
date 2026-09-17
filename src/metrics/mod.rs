@@ -1,11 +1,11 @@
 //! Métricas del sistema expresadas como porcentaje (0.0–100.0).
 
 pub mod cpu;
-pub mod memory;
-
-// Reservado para próximas versiones (aún sin implementar):
 pub mod disk;
 pub mod gpu;
+pub mod memory;
+
+// Reservado para una próxima versión (aún sin implementar):
 pub mod network;
 
 use sysinfo::System;
@@ -26,5 +26,7 @@ pub fn create_metric(kind: MetricKind) -> Box<dyn Metric> {
     match kind {
         MetricKind::Cpu => Box::new(cpu::CpuMetric::new()),
         MetricKind::Ram => Box::new(memory::MemoryMetric::new()),
+        MetricKind::Disk => Box::new(disk::DiskMetric::new()),
+        MetricKind::Gpu => Box::new(gpu::GpuMetric::new()),
     }
 }

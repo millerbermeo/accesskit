@@ -2,17 +2,20 @@
 
 mod app;
 mod config;
+mod icon;
 mod metrics;
+mod shared;
 mod tray;
 mod widgets;
 
 use std::env;
 use std::path::PathBuf;
 
-use eframe::egui::{ViewportBuilder, WindowLevel};
+use eframe::egui::ViewportBuilder;
 
 use app::HaloApp;
 use config::Config;
+use shared::SharedState;
 
 /// Ruta del config: `$XDG_CONFIG_HOME/halo/config.toml` o `~/.config/halo/config.toml`.
 /// Si no hay `HOME`, cae en `config.toml` junto al directorio de trabajo actual.
@@ -59,40 +62,27 @@ fn daemonize() {
 fn main() -> eframe::Result<()> {
     force_x11_backend();
     daemonize();
-    tray::spawn();
 
     let config_path = config_path();
     let config = Config::load_or_create(&config_path);
+    let shared = SharedState::new(config, config_path);
 
-    // El primer widget habilitado se pinta en la ventana raíz.
-    let enabled = config.enabled_kinds();
-    let Some(&root_kind) = enabled.first() else {
-        eprintln!(
-            "halo: no hay ninguna métrica habilitada en {}",
-            config_path.display()
-        );
-        std::process::exit(1);
-    };
+    tray::spawn(shared.clone());
 
-    let widget = config.widget;
-    let mut viewport = ViewportBuilder::default()
+    // Ventana raíz "fantasma": eframe exige una, pero cada métrica vive en su
+    // propia ventana secundaria (ver app.rs), así que esta no muestra nada.
+    // Se mantiene técnicamente visible (eframe deja de llamar a `App::ui` si
+    // la raíz está oculta) pero es transparente, minúscula y queda fuera de
+    // cualquier monitor real, así que nunca se ve.
+    let viewport = ViewportBuilder::default()
         .with_title("halo")
-        .with_inner_size([widget.size, widget.size])
-        .with_min_inner_size([widget.size, widget.size])
-        .with_max_inner_size([widget.size, widget.size])
+        .with_inner_size([2.0, 2.0])
+        .with_position([-32000.0, -32000.0])
         .with_resizable(false)
         .with_decorations(false)
         .with_transparent(true)
         .with_taskbar(false)
-        .with_active(false)
-        .with_window_level(if widget.always_on_top {
-            WindowLevel::AlwaysOnTop
-        } else {
-            WindowLevel::Normal
-        });
-    if let Some([x, y]) = config.metric(root_kind).position {
-        viewport = viewport.with_position([x, y]);
-    }
+        .with_active(false);
 
     let options = eframe::NativeOptions {
         viewport,
@@ -104,6 +94,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "halo",
         options,
-        Box::new(move |_cc| Ok(Box::new(HaloApp::new(config, config_path)))),
+        Box::new(move |_cc| Ok(Box::new(HaloApp::new(shared)))),
     )
 }

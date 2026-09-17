@@ -1,6 +1,6 @@
 # halo
 
-Widgets circulares y transparentes para monitorizar el sistema en Linux (X11 y Wayland). Cada métrica habilitada (CPU, RAM, y próximamente GPU, disco y red) se muestra como un anillo de progreso flotante, sin bordes ni barra de título, que puede arrastrarse libremente sobre el escritorio.
+Widgets circulares y transparentes para monitorizar el sistema en Linux (X11 y Wayland). Cada métrica habilitada (CPU, RAM, disco y GPU NVIDIA, con red pendiente) se muestra como un anillo de progreso flotante, sin bordes ni barra de título, que puede arrastrarse libremente sobre el escritorio.
 
 ## ¿Para qué sirve?
 
@@ -9,13 +9,17 @@ Es un monitor de recursos minimalista pensado para tenerlo siempre visible encim
 ## ¿Cómo funciona?
 
 - **Motor gráfico**: [`egui`](https://github.com/emilk/egui) + [`eframe`](https://github.com/emilk/egui) con backend `glow` (OpenGL), elegido por soportar transparencia real en X11/Wayland con tiempos de compilación bajos.
-- **Métricas**: obtenidas con [`sysinfo`](https://crates.io/crates/sysinfo), refrescadas cada segundo (`REFRESH_INTERVAL`).
+- **Métricas**: CPU, RAM y disco (punto de montaje `/`) obtenidas con [`sysinfo`](https://crates.io/crates/sysinfo); GPU leída de `nvidia-smi` (solo NVIDIA). Se refrescan cada segundo (`REFRESH_INTERVAL`).
 - **Ventanas**: cada métrica habilitada vive en su propia ventana sin decoraciones, transparente y sin foco de teclado (`with_active(false)`), para no interferir con el trabajo normal.
 - **Animación**: al cambiar el valor de una métrica, el anillo se anima con un *ease-out* cúbico durante 400 ms en vez de saltar bruscamente.
 - **Posiciones**: al arrastrar un widget, su nueva posición se guarda automáticamente (con un debounce de 1s) en el archivo de configuración.
 - **Se ejecuta solo en segundo plano**: al lanzar `halo`, el proceso se desatacha de la terminal (`fork` + `setsid`, vía `daemon()`) antes de abrir ninguna ventana. La terminal recupera el control al instante y podés cerrarla sin que la app se cierre. Para depurar con los mensajes de error visibles en la terminal, usá `HALO_FOREGROUND=1 halo`.
 - **Repintado eficiente**: mientras no hay animación en curso, la app "duerme" y solo despierta para el siguiente refresco de métricas — no consume CPU de forma constante.
 - **Icono de bandeja**: al arrancar aparece un icono en la bandeja del sistema (área de notificaciones). Un click despliega un menú con:
+  - **Un submenú por métrica** (CPU, RAM, Disco, GPU), cada uno con:
+    - **Mostrar** (checkbox): oculta o muestra esa métrica al vuelo, sin reiniciar la app.
+    - **Paleta de colores**: 8 colores para el arco de progreso de esa métrica en particular (cada una puede tener el suyo). El cambio se aplica y se guarda al instante.
+  - **Horizontal / Vertical**: los widgets siempre se mueven juntos (arrastrar cualquiera mueve a todos); esta opción elige si la fila queda en horizontal o en columna. Al elegir una, se realinean al instante junto al primero.
   - **Iniciar con el sistema** (checkbox): activa/desactiva el arranque automático al iniciar sesión, escribiendo/borrando `~/.config/autostart/halo.desktop` (estándar XDG Autostart). El estado se lee de ese archivo al abrir el menú, así que persiste entre reinicios sin configuración adicional.
   - **Salir**: cierra la aplicación (las ventanas no tienen barra ni botón de cerrar).
 
@@ -27,7 +31,8 @@ Es un monitor de recursos minimalista pensado para tenerlo siempre visible encim
 | `src/config.rs` | Carga/guardado de `config.toml`, colores, tema |
 | `src/app.rs` | Lógica de la app: refresco, animación, arrastre, guardado de posiciones |
 | `src/widgets/` | Dibujo del anillo de progreso (`CircularProgress`) |
-| `src/metrics/` | Lectura de cada métrica (`cpu.rs`, `memory.rs`; `gpu.rs`, `disk.rs`, `network.rs` reservados para el futuro) |
+| `src/metrics/` | Lectura de cada métrica (`cpu.rs`, `memory.rs`, `disk.rs`, `gpu.rs`; `network.rs` reservado para el futuro) |
+| `src/icon.rs` | Icono del anillo de progreso, dibujado por código (bandeja y ventana) |
 
 ### Configuración
 
@@ -35,7 +40,7 @@ Al primer arranque se crea automáticamente en `~/.config/halo/config.toml` (o `
 
 ```toml
 [widget]
-size = 140.0
+size = 96.6
 opacity = 0.9
 always_on_top = true
 show_label = true
@@ -43,11 +48,22 @@ show_label = true
 [cpu]
 enabled = true
 position = [100.0, 100.0]
+color = "#4361EE"
 
 [ram]
 enabled = true
-position = [260.0, 100.0]
+position = [212.0, 100.0]
+
+[disk]
+enabled = true
+position = [100.0, 212.0]
+
+[gpu]
+enabled = true
+position = [212.0, 212.0]
 ```
+
+`color` es opcional por métrica ("#RRGGBB"); si falta, usa `theme.progress_color`. Se gestiona desde el menú de bandeja, no hace falta editarlo a mano.
 
 Los cambios en el archivo se aplican al reiniciar la aplicación. Las posiciones se actualizan solas al arrastrar los widgets.
 
@@ -93,6 +109,7 @@ cargo build --release
 - Linux con X11 o Wayland.
 - `git`.
 - Libs de desarrollo para el icono de bandeja: `libgtk-3-dev`, `libxdo-dev`, `libayatana-appindicator3-dev` (o `libappindicator3-dev`). `install.sh` las instala automáticamente en distros basadas en Debian/Ubuntu (pide `sudo`); en otras distros hay que instalarlas a mano antes de compilar.
+- Opcional: `nvidia-smi` (driver NVIDIA) para la métrica de GPU. Sin él, el widget de GPU se queda en 0%.
 - Para que el icono de bandeja se vea en **GNOME** hace falta la extensión "AppIndicator and KStatusNotifierItem Support" (en Ubuntu viene preinstalada y activa por defecto).
 
 ## Desinstalar

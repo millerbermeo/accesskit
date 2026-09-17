@@ -10,7 +10,7 @@ ring_background_color = "#3A3A3A"
 ring_width = 6.0
 
 [widget]
-size = 84.0
+size = 96.6
 opacity = 0.9
 always_on_top = true
 show_label = true
@@ -21,13 +21,15 @@ position = [100.0, 100.0]
 
 [ram]
 enabled = true
-position = [260.0, 100.0]
-
-[gpu]
-enabled = false
+position = [212.0, 100.0]
 
 [disk]
-enabled = false
+enabled = true
+position = [100.0, 212.0]
+
+[gpu]
+enabled = true
+position = [212.0, 212.0]
 
 [network]
 enabled = false
